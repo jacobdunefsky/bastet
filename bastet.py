@@ -22,7 +22,7 @@ NumExpr = collections.namedtuple("NumExpr", ['expr_type', 'num_expr_value'])
 StrExpr = collections.namedtuple("StrExpr", ['expr_type', 'str_expr_value'])
 ValExpr = collections.namedtuple("ValExpr", ['expr_type', 'val_expr_value'])
 
-binary_ops = ['+', '==', '@']
+binary_ops = ['+', '==', '!=', '@']
 
 class BastetError(Exception):
 	def __init__(self, msg, offender):
@@ -460,6 +460,14 @@ def equals(args):
 	else:
 		return NumValue(value_type=ValueTypes.NUM, num_value=0)
 
+def notequals(args):
+	a = args[0]
+	b = args[1]
+	if a != b:
+		return NumValue(value_type=ValueTypes.NUM, num_value=1)
+	else:
+		return NumValue(value_type=ValueTypes.NUM, num_value=0)
+
 #END builtin functions
 
 # load our builtin functions into func_dict
@@ -469,6 +477,7 @@ func_dict["list"] = make_list
 func_dict["+"] = add
 func_dict["@"] = index
 func_dict["=="] = equals
+func_dict["!="] = notequals
 
 # block processing
 
