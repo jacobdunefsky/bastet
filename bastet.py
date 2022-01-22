@@ -5,6 +5,34 @@ import csv
 
 #BaSTet: BAsic Static TEmplaTes
 
+# levels of finishedness:
+# TODO: hasn't even been begun
+# WORK: is being implemented
+# DONE: implemented, but not tested to satisfaction
+# PERF: tested to satisfaction
+
+#DONE: an expression like ($my_table@1).title should work
+#problem: the "." that denotes indexing by key can be confused
+#	with the "." denoting a decimal
+#it'd be nice to make this into a binary operator; but we'd need a special
+#	case because of this ambiguity
+# we'd also need to refactor the whole concept of VarExpr
+
+#DONE: add scope
+#we'd need a variable stack for for loops, if statements, etc
+#maybe a stack for each variable?
+#have to modify set code, for loop code, and if code
+#in fact, we might have to change how identifiers are stored
+#	each identifier will be associated with a list 
+#no: instead, whenever we enter a new scope, we have another variable dict
+#in fact, we have a stack of variable dicts
+#and when we try to reference a variable, we work backwards through the stack
+
+#WORK: better error handling
+#errors should at least have line number, if not line and character number
+#	DONE: line number done for errors that aren't found in blockify
+#multiple errors should be able to be output in one pass
+
 class ExprTypes(enum.Enum):
 	FUNC = 1
 	VAR = 2
@@ -22,7 +50,7 @@ NumExpr = collections.namedtuple("NumExpr", ['expr_type', 'num_expr_value'])
 StrExpr = collections.namedtuple("StrExpr", ['expr_type', 'str_expr_value'])
 ValExpr = collections.namedtuple("ValExpr", ['expr_type', 'val_expr_value'])
 
-binary_ops = ['+', '==', '!=', '@']
+binary_ops = ['+', '-', '*', '/', '%', '!=', '!', '==', '@']
 
 class BastetError(Exception):
 	def __init__(self, msg, offender):
@@ -460,7 +488,7 @@ def equals(args):
 	else:
 		return NumValue(value_type=ValueTypes.NUM, num_value=0)
 
-def notequals(args):
+def not_equals(args):
 	a = args[0]
 	b = args[1]
 	if a != b:
@@ -477,7 +505,7 @@ func_dict["list"] = make_list
 func_dict["+"] = add
 func_dict["@"] = index
 func_dict["=="] = equals
-func_dict["!="] = notequals
+func_dict["!="] = not_equals
 
 # block processing
 
@@ -577,11 +605,16 @@ def get_stmt_arg(block, arg_num):
 
 	cur_arg_num = 0
 
+	paren_level = 0
+
 	while i < len(code):
 		if code[i] == "\"":
 			# no escapes in this language
 			in_str = not in_str
-		if code[i] == " " and not in_str:
+		if not in_str:
+			if code[i] == "(": paren_level += 1
+			elif code[i] == ")": paren_level -= 1
+		if code[i] == " " and not in_str and paren_level == 0:
 			#see a space, split our args
 			if cur_arg_num == arg_num:
 				return code[arg_start:i]
@@ -620,7 +653,7 @@ def block_eval(blocks):
 				try:
 					incl_file = open(pathname, "r")
 				except FileNotFoundError:
-					error("invalid path in include", cur_stmt)
+					error("invalid path in include", pathname)
 				incl_blocks = blockify(incl_file.read())
 				#print(incl_blocks)
 				retlist.extend(block_eval(incl_blocks))
@@ -813,6 +846,87 @@ def block_eval(blocks):
 						raw_block_value="", block_linenum=-1)
 				del_scope_frame()
 				continue
+
+			if cur_stmt == "capture":
+				# a block statement
+				# evaluate everything in the block, and then set the variable
+				#  given as the argument to the output of the block
+				set_var_str = get_stmt_arg(block, 1)
+				set_var_expr = expr_process(set_var_str)
+				if set_var_expr.expr_type != ExprTypes.VAR:
+					error("capture takes a variable", block)
+
+				# the rest of the code stolen from output
+				new_scope_frame()
+
+				loop_level = 1
+				j = i+1
+				while j < len(blocks):
+					inner_block = blocks[j]
+					if is_raw(inner_block):
+						j += 1
+						continue
+					inner_stmt = get_stmt(inner_block)
+					if inner_stmt == "capture":
+						loop_level += 1
+					if inner_stmt == "endcapture":
+						loop_level -= 1
+					if loop_level == 0:
+						break
+					j += 1
+				if not loop_level == 0:
+					error("capture tag isn't closed", block)
+
+				# actually capture the output of the blocks
+				retval = block_eval(blocks[i+1:j])
+
+				for k in range(i,j):
+					#hack to skip past blocks evaluated in output statement
+					blocks[k] = RawBlock(block_type=BlockTypes.RAW,\
+						raw_block_value="", block_linenum=-1)
+				del_scope_frame()
+
+				# set the variable to the value
+				set_var(set_var_expr.var_expr_name,
+					StrValue(value_type=ValueTypes.STR,
+					str_value=retval)
+				)
+				continue
+
+			if cur_stmt == "suppress":
+				# a block statement
+				# evaluate everything in the inner block, in the same scope as
+				#  the outer block, but discard output
+				# useful for importing variables from includes without
+				#  also including their outputs
+
+				loop_level = 1
+				j = i+1
+				while j < len(blocks):
+					inner_block = blocks[j]
+					if is_raw(inner_block):
+						j += 1
+						continue
+					inner_stmt = get_stmt(inner_block)
+					if inner_stmt == "suppress":
+						loop_level += 1
+					if inner_stmt == "endsuppress":
+						loop_level -= 1
+					if loop_level == 0:
+						break
+					j += 1
+				if not loop_level == 0:
+					error("suppress tag isn't closed", block)
+
+				# actually capture the output of the blocks
+				retval = block_eval(blocks[i+1:j])
+
+				for k in range(i,j):
+					#hack to skip past blocks evaluated in output statement
+					blocks[k] = RawBlock(block_type=BlockTypes.RAW,\
+						raw_block_value="", block_linenum=-1)
+				continue
+
 		except BastetError as e:
 			print("Error in block",i)
 			print("\t", blocks[i])
